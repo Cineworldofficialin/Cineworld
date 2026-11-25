@@ -1,0 +1,2590 @@
+package com.example.cineworld;
+
+import android.app.DownloadManager;
+import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.*;
+
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+
+import com.example.cineworld.databinding.ActivityMainBinding;
+import com.bumptech.glide.Glide;
+
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.common.Player;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.ExoPlayer;
+
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.FieldValue;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+
+@UnstableApi
+public class MainActivity extends AppCompatActivity {
+
+    private ActivityMainBinding binding;
+
+    private TextView profileNameView, profileEmailView;
+    private ExoPlayer player;
+    private DownloadManager downloadManager;
+
+    private Handler downloadHandler =
+            new Handler(Looper.getMainLooper());
+
+    private Runnable downloadRunnable;
+
+    private TextView[] navigationItems;
+    private LinearLayout downloadsList;
+    private TextView storageText;
+    private ProgressBar storageProgress;
+    private Switch wifiSwitch, mobileDataSwitch;
+    private Spinner qualitySpinner;
+
+    private FrameLayout authOverlay;
+
+    private boolean authGateActive = false;
+    private boolean authBusy = false;
+
+    // Admin/session verification flags
+    private boolean sessionCheckPending = false;
+    private boolean sessionCheckFailed = false;
+
+    private FirebaseAuth mAuth;
+    private FirebaseFirestore db;
+
+    private static final String KEY_WIFI = "allow_wifi";
+    private static final String KEY_MOBILE = "allow_mobile";
+    private static final String KEY_QUALITY = "download_quality";
+
+    private final int gold = 0xFFFFC107;
+    private final int gray = 0xFFAAAAAA;
+    private final int white = 0xFFFFFFFF;
+    private final int dark = 0xFF191920;
+    private final int black = 0xFF101018;
+
+    private final ArrayList<Long> downloadIds = new ArrayList<>();
+
+    private long initialFreeBytes = 0;
+    private long storageLimitBytes = 0;
+
+    private static final String PREFS = "cineworld_downloads";
+    private static final String PROFILE_PREFS = "cineworld_profile";
+
+    private static final String DEMO_URL =
+            "https://storage.googleapis.com/exoplayer-test-media-0/BigBuckBunny_320x180.mp4";
+
+    private static class ContentItem {
+        String title, genre, description, image;
+        boolean series;
+
+        ContentItem(String title, String genre, String description,
+                    String image, boolean series) {
+            this.title = title;
+            this.genre = genre;
+            this.description = description;
+            this.image = image;
+            this.series = series;
+        }
+    }
+
+    private final ArrayList<ContentItem> movies =
+            new ArrayList<>(Arrays.asList(
+
+                    new ContentItem("Shadow Strike", "Action • Thriller",
+                            "A mysterious hero faces a dangerous enemy in this demo action movie.",
+                            "https://images.unsplash.com/photo-1509347528160-9a9e33742cdb?w=500",
+                            false),
+
+                    new ContentItem("Lost Kingdom", "Adventure • Fantasy",
+                            "An adventure through a forgotten kingdom. Demo movie description.",
+                            "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=500",
+                            false),
+
+                    new ContentItem("Dark Mystery", "Mystery • Thriller",
+                            "A detective investigates a mystery that changes everything.",
+                            "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=500",
+                            false),
+
+                    new ContentItem("Final Mission", "Action • Drama",
+                            "A special team takes on its most difficult mission.",
+                            "https://images.unsplash.com/photo-1478720568477-152d9b164e26?w=500",
+                            false)
+            ));
+
+    private final ArrayList<ContentItem> shows =
+            new ArrayList<>(Arrays.asList(
+
+                    new ContentItem("The Hidden Truth", "Mystery • Drama",
+                            "A mystery series about secrets, family and unexpected discoveries.",
+                            "https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?w=500",
+                            true),
+
+                    new ContentItem("City of Dreams", "Drama • Romance",
+                            "A story of ambition and relationships in a big city.",
+                            "https://images.unsplash.com/photo-1440404653325-ab127d49abc1?w=500",
+                            true),
+
+                    new ContentItem("Survival Zone", "Action • Adventure",
+                            "A group of survivors must work together to stay alive.",
+                            "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=500",
+                            true)
+            ));
+
+    // ----------------------------------------------------
+    // ACTIVITY START
+    // ----------------------------------------------------
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        binding = ActivityMainBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
+
+        mAuth = FirebaseAuth.getInstance();
+        db = FirebaseFirestore.getInstance();
+
+        setupDownloadManager();
+        setupPlayer();
+        setupNavigation();
+        setupHeader();
+        setupHome();
+        setupCatalogScreens();
+        setupDownloadsScreen();
+        setupProfileScreen();
+        loadAllImages();
+
+        startDownloadMonitoring();
+
+        FirebaseUser user = mAuth.getCurrentUser();
+
+        if (user == null) {
+
+            authGateActive = true;
+            setAppContentLocked(true);
+            showAuthScreen("login");
+
+        } else {
+
+            // Do not show User Home until role verification completes.
+            authGateActive = true;
+            setAppContentLocked(true);
+
+            verifyAndRouteSession(user);
+        }
+    }
+
+    // ----------------------------------------------------
+    // FIREBASE ADMIN / USER SESSION ROUTING
+    // ----------------------------------------------------
+
+    private void verifyAndRouteSession(FirebaseUser user) {
+
+        if (user == null) {
+
+            sessionCheckPending = false;
+            sessionCheckFailed = false;
+
+            authGateActive = true;
+            setAppContentLocked(true);
+
+            if (authOverlay == null) {
+                showAuthScreen("login");
+            }
+
+            return;
+        }
+
+        // Avoid duplicate Firestore requests.
+        if (sessionCheckPending) return;
+
+        sessionCheckPending = true;
+        sessionCheckFailed = false;
+
+        authGateActive = true;
+        setAppContentLocked(true);
+
+        db.collection("admins")
+                .document(user.getUid())
+                .get()
+                .addOnSuccessListener(document -> {
+
+                    if (isFinishing() || isDestroyed()) return;
+
+                    sessionCheckPending = false;
+
+                    if (document.exists()
+                            && "admin".equals(
+                                    document.getString("role"))) {
+
+                        // ADMIN ACCOUNT
+                        openAdminDashboard();
+
+                    } else {
+
+                        // NORMAL USER ACCOUNT
+                        finishAuthentication();
+                    }
+                })
+                .addOnFailureListener(error -> {
+
+                    if (isFinishing() || isDestroyed()) return;
+
+                    sessionCheckPending = false;
+                    sessionCheckFailed = true;
+
+                    authGateActive = true;
+                    setAppContentLocked(true);
+
+                    showSessionVerificationError(
+                            error.getMessage());
+                });
+    }
+
+    private void openAdminDashboard() {
+
+        if (isFinishing() || isDestroyed()) return;
+
+        sessionCheckPending = false;
+        sessionCheckFailed = false;
+
+        Intent intent = new Intent(
+                MainActivity.this,
+                AdminDashboardActivity.class);
+
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK |
+                Intent.FLAG_ACTIVITY_CLEAR_TASK);
+
+        startActivity(intent);
+        finish();
+    }
+
+    private void showSessionVerificationError(String error) {
+
+        String message = "Unable to verify your account.";
+
+        if (error != null && !error.trim().isEmpty()) {
+            message += "\n\n" + error;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("ACCOUNT VERIFICATION")
+                .setMessage(message)
+                .setCancelable(false)
+                .setPositiveButton("RETRY",
+                        (dialog, which) -> {
+
+                            FirebaseUser user =
+                                    mAuth.getCurrentUser();
+
+                            sessionCheckFailed = false;
+                            verifyAndRouteSession(user);
+                        })
+                .setNegativeButton("LOGOUT",
+                        (dialog, which) -> {
+
+                            mAuth.signOut();
+
+                            sessionCheckPending = false;
+                            sessionCheckFailed = false;
+                            authGateActive = true;
+
+                            setAppContentLocked(true);
+                            showAuthScreen("login");
+                        })
+                .show();
+    }
+
+    // ----------------------------------------------------
+    // FULL SCREEN FIREBASE AUTHENTICATION
+    // ----------------------------------------------------
+
+    private void showAuthScreen(String screen) {
+
+        if (isFinishing() || isDestroyed()) return;
+
+        FirebaseUser currentUser = mAuth.getCurrentUser();
+
+        if (currentUser != null) {
+
+            verifyAndRouteSession(currentUser);
+            return;
+        }
+
+        authGateActive = true;
+        setAppContentLocked(true);
+
+        ViewGroup content = findViewById(android.R.id.content);
+
+        if (authOverlay != null) {
+
+            ViewGroup oldParent =
+                    (ViewGroup) authOverlay.getParent();
+
+            if (oldParent != null) {
+                oldParent.removeView(authOverlay);
+            }
+
+            authOverlay = null;
+        }
+
+        authOverlay = new FrameLayout(this);
+        authOverlay.setBackgroundColor(black);
+        authOverlay.setClickable(true);
+        authOverlay.setFocusable(true);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setVerticalScrollBarEnabled(false);
+
+        FrameLayout.LayoutParams scrollParams =
+                new FrameLayout.LayoutParams(-1, -1);
+
+        authOverlay.addView(scroll, scrollParams);
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER_HORIZONTAL);
+        page.setPadding(dp(25), dp(35), dp(25), dp(30));
+
+        scroll.addView(page, new ScrollView.LayoutParams(-1, -2));
+
+        TextView logo = makeText("CINEWORLD", 35, gold, true);
+        logo.setGravity(Gravity.CENTER);
+        logo.setLetterSpacing(0.08f);
+        page.addView(logo);
+
+        TextView tagline = makeText(
+                "YOUR MOVIES. YOUR WORLD.", 11, gray, true);
+
+        tagline.setGravity(Gravity.CENTER);
+        tagline.setPadding(0, dp(5), 0, dp(25));
+        page.addView(tagline);
+
+        View line = new View(this);
+        line.setBackgroundColor(gold);
+
+        LinearLayout.LayoutParams lineParams =
+                new LinearLayout.LayoutParams(dp(65), dp(3));
+
+        lineParams.gravity = Gravity.CENTER;
+        lineParams.bottomMargin = dp(25);
+        page.addView(line, lineParams);
+
+        LinearLayout card = verticalLayout();
+        card.setPadding(dp(20), dp(24), dp(20), dp(22));
+        card.setBackground(
+                roundedBackground(0xFF191920, 0xFF806019, 20));
+
+        page.addView(card,
+                new LinearLayout.LayoutParams(-1, -2));
+
+        if ("register".equals(screen)) {
+
+            addAuthHeading(card, "CREATE NEW ACCOUNT",
+                    "Join CineWorld and enjoy your entertainment.");
+
+            EditText name = authInput("Full name");
+
+            name.setInputType(
+                    android.text.InputType.TYPE_CLASS_TEXT |
+                    android.text.InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+
+            card.addView(name);
+
+            EditText email = authInput("Email address");
+
+            email.setInputType(
+                    android.text.InputType.TYPE_CLASS_TEXT |
+                    android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+
+            addAuthInputSpacing(card, email);
+
+            EditText password =
+                    authInput("Password (minimum 6 characters)");
+
+            password.setInputType(
+                    android.text.InputType.TYPE_CLASS_TEXT |
+                    android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+            addAuthInputSpacing(card, password);
+
+            EditText confirm = authInput("Confirm password");
+
+            confirm.setInputType(
+                    android.text.InputType.TYPE_CLASS_TEXT |
+                    android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+            addAuthInputSpacing(card, confirm);
+
+            Button register = authButton("CREATE ACCOUNT");
+            addAuthButtonSpacing(card, register);
+
+            register.setOnClickListener(v -> {
+
+                String userName =
+                        name.getText().toString().trim();
+
+                String userEmail =
+                        email.getText().toString().trim();
+
+                String userPassword =
+                        password.getText().toString();
+
+                String confirmPassword =
+                        confirm.getText().toString();
+
+                if (userName.isEmpty()) {
+                    name.setError("Enter your name");
+                    return;
+                }
+
+                if (!isValidEmail(userEmail)) {
+                    email.setError("Enter a valid email");
+                    return;
+                }
+
+                if (userPassword.length() < 6) {
+                    password.setError(
+                            "Minimum 6 characters required");
+                    return;
+                }
+
+                if (!userPassword.equals(confirmPassword)) {
+                    confirm.setError("Passwords do not match");
+                    return;
+                }
+
+                if (authBusy) return;
+
+                authBusy = true;
+                register.setEnabled(false);
+                register.setText("CREATING ACCOUNT...");
+
+                mAuth.createUserWithEmailAndPassword(
+                        userEmail, userPassword
+                ).addOnCompleteListener(task -> {
+
+                    authBusy = false;
+
+                    if (!task.isSuccessful()) {
+
+                        register.setEnabled(true);
+                        register.setText("CREATE ACCOUNT");
+
+                        showMessage(authError(task.getException()));
+                        return;
+                    }
+
+                    FirebaseUser user = mAuth.getCurrentUser();
+
+                    if (user == null) {
+
+                        register.setEnabled(true);
+                        register.setText("CREATE ACCOUNT");
+
+                        showMessage(
+                                "Account created, but session unavailable.");
+
+                        return;
+                    }
+
+                    Map<String, Object> profile = new HashMap<>();
+
+                    profile.put("uid", user.getUid());
+                    profile.put("name", userName);
+                    profile.put("email", userEmail);
+                    profile.put("createdAt",
+                            FieldValue.serverTimestamp());
+
+                    saveLocalProfile(userName, userEmail);
+
+                    db.collection("users")
+                            .document(user.getUid())
+                            .set(profile)
+                            .addOnCompleteListener(profileTask -> {
+
+                                verifyAndRouteSession(user);
+
+                                showMessage(
+                                        profileTask.isSuccessful()
+                                                ? "Account created successfully!"
+                                                : "Account created. Profile sync pending.");
+                            });
+                });
+            });
+
+            addAuthTextButton(card,
+                    "Already have an account? LOGIN",
+                    () -> showAuthScreen("login"));
+
+        } else if ("forgot".equals(screen)) {
+
+            addAuthHeading(card, "FORGOT PASSWORD",
+                    "Enter your registered email to receive a reset link.");
+
+            EditText email = authInput("Registered email address");
+
+            email.setInputType(
+                    android.text.InputType.TYPE_CLASS_TEXT |
+                    android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+
+            card.addView(email);
+
+            Button send = authButton("SEND RESET LINK");
+            addAuthButtonSpacing(card, send);
+
+            send.setOnClickListener(v -> {
+
+                String userEmail =
+                        email.getText().toString().trim();
+
+                if (!isValidEmail(userEmail)) {
+                    email.setError("Enter a valid email");
+                    return;
+                }
+
+                if (authBusy) return;
+
+                authBusy = true;
+                send.setEnabled(false);
+                send.setText("SENDING...");
+
+                mAuth.sendPasswordResetEmail(userEmail)
+                        .addOnCompleteListener(task -> {
+
+                            authBusy = false;
+                            send.setEnabled(true);
+                            send.setText("SEND RESET LINK");
+
+                            if (task.isSuccessful()) {
+
+                                showMessage(
+                                        "Password reset link sent to your email.");
+
+                                showAuthScreen("login");
+
+                            } else {
+
+                                showMessage(
+                                        authError(task.getException()));
+                            }
+                        });
+            });
+
+            addAuthTextButton(card, "BACK TO LOGIN",
+                    () -> showAuthScreen("login"));
+
+        } else {
+
+            addAuthHeading(card, "WELCOME BACK",
+                    "Login to continue watching your favourite movies.");
+
+            EditText email = authInput("Email address");
+
+            email.setInputType(
+                    android.text.InputType.TYPE_CLASS_TEXT |
+                    android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+
+            card.addView(email);
+
+            EditText password = authInput("Password");
+
+            password.setInputType(
+                    android.text.InputType.TYPE_CLASS_TEXT |
+                    android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+            addAuthInputSpacing(card, password);
+
+            TextView forgot =
+                    makeText("Forgot Password?", 12, gold, true);
+
+            forgot.setGravity(Gravity.END);
+            forgot.setPadding(0, dp(12), 0, dp(8));
+
+            forgot.setOnClickListener(v ->
+                    showAuthScreen("forgot"));
+
+            card.addView(forgot);
+
+            Button login = authButton("LOGIN");
+            addAuthButtonSpacing(card, login);
+
+            login.setOnClickListener(v -> {
+
+                String userEmail =
+                        email.getText().toString().trim();
+
+                String userPassword =
+                        password.getText().toString();
+
+                if (!isValidEmail(userEmail)) {
+                    email.setError("Enter a valid email");
+                    return;
+                }
+
+                if (userPassword.isEmpty()) {
+                    password.setError("Enter your password");
+                    return;
+                }
+
+                if (authBusy) return;
+
+                authBusy = true;
+                login.setEnabled(false);
+                login.setText("PLEASE WAIT...");
+
+                mAuth.signInWithEmailAndPassword(
+                        userEmail, userPassword
+                ).addOnCompleteListener(task -> {
+
+                    authBusy = false;
+
+                    if (task.isSuccessful()) {
+
+                        FirebaseUser user = mAuth.getCurrentUser();
+
+                        if (user != null) {
+                            verifyAndRouteSession(user);
+                        } else {
+                            login.setEnabled(true);
+                            login.setText("LOGIN");
+                            showMessage("Login session unavailable.");
+                        }
+
+                        showMessage("Login successful!");
+
+                    } else {
+
+                        login.setEnabled(true);
+                        login.setText("LOGIN");
+
+                        showMessage(
+                                authError(task.getException()));
+                    }
+                });
+            });
+
+            addAuthTextButton(card, "CREATE NEW ACCOUNT",
+                    () -> showAuthScreen("register"));
+
+            // ADMIN LOGIN - FIRST PAGE ONLY
+
+            View divider = new View(this);
+            divider.setBackgroundColor(0xFF514629);
+
+            LinearLayout.LayoutParams dividerParams =
+                    new LinearLayout.LayoutParams(-1, dp(1));
+
+            dividerParams.topMargin = dp(22);
+            dividerParams.bottomMargin = dp(18);
+
+            card.addView(divider, dividerParams);
+
+            TextView adminHeading =
+                    makeText("ADMIN ACCESS", 16, gold, true);
+
+            adminHeading.setGravity(Gravity.CENTER);
+            card.addView(adminHeading);
+
+            TextView adminDescription =
+                    makeText("Authorized administrators only",
+                            11, gray, false);
+
+            adminDescription.setGravity(Gravity.CENTER);
+
+            LinearLayout.LayoutParams descriptionParams =
+                    new LinearLayout.LayoutParams(-1, -2);
+
+            descriptionParams.topMargin = dp(5);
+            card.addView(adminDescription, descriptionParams);
+
+            Button adminLogin = authButton("ADMIN LOGIN");
+
+            LinearLayout.LayoutParams adminParams =
+                    new LinearLayout.LayoutParams(-1, dp(50));
+
+            adminParams.topMargin = dp(15);
+            card.addView(adminLogin, adminParams);
+
+            adminLogin.setOnClickListener(v -> {
+
+                Intent intent = new Intent(
+                        MainActivity.this,
+                        AdminLoginActivity.class);
+
+                startActivity(intent);
+            });
+        }
+
+        TextView footer = makeText(
+                "SECURE ACCOUNT • CINEWORLD", 10, gray, true);
+
+        footer.setGravity(Gravity.CENTER);
+        footer.setPadding(0, dp(25), 0, 0);
+        page.addView(footer);
+
+        content.addView(authOverlay,
+                new ViewGroup.LayoutParams(-1, -1));
+    }
+
+    private void addAuthHeading(LinearLayout parent,
+                                String title, String subtitle) {
+
+        TextView heading = makeText(title, 21, white, true);
+        heading.setGravity(Gravity.CENTER);
+        parent.addView(heading);
+
+        TextView description =
+                makeText(subtitle, 12, gray, false);
+
+        description.setGravity(Gravity.CENTER);
+        description.setPadding(0, dp(8), 0, dp(22));
+
+        parent.addView(description);
+    }
+
+    private EditText authInput(String hint) {
+
+        EditText input = new EditText(this);
+
+        input.setSingleLine(true);
+        input.setTextColor(white);
+        input.setHintTextColor(0xFF888888);
+        input.setHint(hint);
+        input.setTextSize(14);
+        input.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        input.setBackground(
+                roundedBackground(0xFF25252F, 0xFF514629, 12));
+
+        input.setLayoutParams(
+                new LinearLayout.LayoutParams(-1, dp(54)));
+
+        return input;
+    }
+
+    private void addAuthInputSpacing(LinearLayout parent, View input) {
+
+        LinearLayout.LayoutParams params =
+                (LinearLayout.LayoutParams) input.getLayoutParams();
+
+        params.topMargin = dp(12);
+        input.setLayoutParams(params);
+
+        parent.addView(input);
+    }
+
+    private Button authButton(String label) {
+
+        Button button = new Button(this);
+
+        button.setText(label);
+        button.setTextColor(black);
+        button.setTextSize(14);
+        button.setTypeface(null, Typeface.BOLD);
+        button.setAllCaps(false);
+
+        button.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(gold));
+
+        button.setLayoutParams(
+                new LinearLayout.LayoutParams(-1, dp(52)));
+
+        return button;
+    }
+
+    private void addAuthButtonSpacing(LinearLayout parent,
+                                      Button button) {
+
+        LinearLayout.LayoutParams params =
+                (LinearLayout.LayoutParams) button.getLayoutParams();
+
+        params.topMargin = dp(12);
+        button.setLayoutParams(params);
+
+        parent.addView(button);
+    }
+
+    private void addAuthTextButton(LinearLayout parent,
+                                   String label, Runnable action) {
+
+        TextView button = makeText(label, 13, gold, true);
+
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(0, dp(20), 0, dp(5));
+        button.setOnClickListener(v -> action.run());
+
+        parent.addView(button);
+    }
+
+    private void finishAuthentication() {
+
+        sessionCheckPending = false;
+        sessionCheckFailed = false;
+
+        authGateActive = false;
+        authBusy = false;
+
+        if (authOverlay != null) {
+
+            ViewGroup parent =
+                    (ViewGroup) authOverlay.getParent();
+
+            if (parent != null) {
+                parent.removeView(authOverlay);
+            }
+
+            authOverlay = null;
+        }
+
+        setAppContentLocked(false);
+        selectTab(0);
+        loadSignedInUserProfile();
+    }
+
+    private boolean isValidEmail(String email) {
+
+        return email != null &&
+                android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches();
+    }
+
+    private String authError(Exception exception) {
+
+        if (exception == null) {
+            return "Authentication failed. Please try again.";
+        }
+
+        String message = exception.getMessage();
+
+        if (message == null) {
+            return "Authentication failed. Please try again.";
+        }
+
+        if (message.contains("password is invalid") ||
+                message.contains("INVALID_LOGIN_CREDENTIALS")) {
+            return "Incorrect email or password.";
+        }
+
+        if (message.contains("no user record")) {
+            return "No account found with this email.";
+        }
+
+        if (message.contains("email address is already in use")) {
+            return "This email is already registered.";
+        }
+
+        if (message.contains("network")) {
+            return "Network error. Check your internet connection.";
+        }
+
+        return message;
+    }
+
+    // ----------------------------------------------------
+    // FIREBASE USER PROFILE
+    // ----------------------------------------------------
+
+    private void loadSignedInUserProfile() {
+
+        FirebaseUser user = mAuth.getCurrentUser();
+
+        if (user == null) {
+            showGuestProfile();
+            return;
+        }
+
+        db.collection("users")
+                .document(user.getUid())
+                .get()
+                .addOnSuccessListener(document -> {
+
+                    String name = document.getString("name");
+                    String email = document.getString("email");
+
+                    if (name == null || name.trim().isEmpty()) {
+                        name = user.getDisplayName();
+                    }
+
+                    if (name == null || name.trim().isEmpty()) {
+                        name = "CineWorld User";
+                    }
+
+                    if (email == null || email.trim().isEmpty()) {
+                        email = user.getEmail();
+                    }
+
+                    saveLocalProfile(name, email);
+
+                    if (profileNameView != null) {
+                        profileNameView.setText(name);
+                    }
+
+                    if (profileEmailView != null) {
+                        profileEmailView.setText(
+                                email == null ? "" : email);
+                    }
+
+                    setupProfileScreen();
+                })
+                .addOnFailureListener(e -> {
+
+                    String name = user.getDisplayName();
+
+                    if (name == null || name.trim().isEmpty()) {
+                        name = "CineWorld User";
+                    }
+
+                    saveLocalProfile(name, user.getEmail());
+                    setupProfileScreen();
+                });
+    }
+
+    private void saveLocalProfile(String name, String email) {
+
+        getSharedPreferences(PROFILE_PREFS, MODE_PRIVATE)
+                .edit()
+                .putString("profile_name", name)
+                .putString("profile_email",
+                        email == null ? "Welcome to CineWorld" : email)
+                .apply();
+    }
+
+    private void showGuestProfile() {
+
+        getSharedPreferences(PROFILE_PREFS, MODE_PRIVATE)
+                .edit()
+                .putString("profile_name", "CineWorld User")
+                .putString("profile_email", "Welcome to CineWorld")
+                .apply();
+
+        if (profileNameView != null) {
+            profileNameView.setText("CineWorld User");
+        }
+
+        if (profileEmailView != null) {
+            profileEmailView.setText("Welcome to CineWorld");
+        }
+
+        setupProfileScreen();
+    }
+
+    private void setAppContentLocked(boolean locked) {
+
+        if (binding == null) return;
+
+        binding.mainScroll.setVisibility(
+                locked ? View.GONE : View.VISIBLE);
+
+        if (navigationItems != null) {
+
+            for (TextView item : navigationItems) {
+
+                if (item != null) {
+                    item.setVisibility(
+                            locked ? View.GONE : View.VISIBLE);
+                }
+            }
+        }
+
+        binding.searchButton.setVisibility(
+                locked ? View.GONE : View.VISIBLE);
+
+        binding.notificationButton.setVisibility(
+                locked ? View.GONE : View.VISIBLE);
+
+        binding.profileButton.setVisibility(
+                locked ? View.GONE : View.VISIBLE);
+    }
+
+    private void logoutUser() {
+
+        new AlertDialog.Builder(this)
+                .setTitle("LOGOUT")
+                .setMessage("Are you sure you want to logout?")
+                .setNegativeButton("CANCEL", null)
+                .setPositiveButton("LOGOUT", (dialog, which) -> {
+
+                    mAuth.signOut();
+
+                    sessionCheckPending = false;
+                    sessionCheckFailed = false;
+                    authGateActive = true;
+
+                    showGuestProfile();
+                    setAppContentLocked(true);
+                    showAuthScreen("login");
+
+                    showMessage("Logged out successfully");
+                })
+                .show();
+    }
+
+    // ----------------------------------------------------
+    // IMAGE LOADING
+    // ----------------------------------------------------
+
+    private void loadAllImages() {
+
+        loadPoster(binding.featuredImage,
+                "https://images.unsplash.com/photo-1478720568477-152d9b164e26?w=1200");
+
+        loadPoster(binding.posterOne, movies.get(0).image);
+        loadPoster(binding.posterTwo, movies.get(1).image);
+        loadPoster(binding.posterThree, movies.get(2).image);
+    }
+
+    private void loadPoster(ImageView image, String url) {
+
+        Glide.with(this)
+                .load(url)
+                .placeholder(new ColorDrawable(0xFF292018))
+                .error(new ColorDrawable(0xFF292018))
+                .centerCrop()
+                .into(image);
+    }
+
+    // ----------------------------------------------------
+    // DOWNLOAD MANAGER
+    // ----------------------------------------------------
+
+    private void setupDownloadManager() {
+
+        downloadManager =
+                (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+
+        File folder = getDownloadFolder();
+
+        if (folder != null) {
+            initialFreeBytes = folder.getUsableSpace();
+            storageLimitBytes = initialFreeBytes * 80L / 100L;
+        }
+
+        loadDownloadIds();
+    }
+
+    private File getDownloadFolder() {
+
+        File folder =
+                getExternalFilesDir(Environment.DIRECTORY_MOVIES);
+
+        if (folder == null) {
+            folder = new File(getFilesDir(), "CineWorldMovies");
+        }
+
+        if (!folder.exists()) {
+            folder.mkdirs();
+        }
+
+        return folder;
+    }
+
+    private void saveDownloadIds() {
+
+        StringBuilder value = new StringBuilder();
+
+        for (Long id : downloadIds) {
+
+            if (value.length() > 0) {
+                value.append(",");
+            }
+
+            value.append(id);
+        }
+
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+                .edit()
+                .putString("ids", value.toString())
+                .apply();
+    }
+
+    private void loadDownloadIds() {
+
+        String saved = getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString("ids", "");
+
+        downloadIds.clear();
+
+        if (saved == null || saved.isEmpty()) return;
+
+        for (String value : saved.split(",")) {
+
+            try {
+                downloadIds.add(Long.parseLong(value));
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void startMovieDownload(ContentItem item) {
+
+        if (downloadManager == null) {
+            showMessage("Download Manager unavailable");
+            return;
+        }
+
+        File folder = getDownloadFolder();
+
+        if (folder == null) {
+            showMessage("Storage unavailable");
+            return;
+        }
+
+        long available = folder.getUsableSpace();
+
+        if (available <= 0 ||
+                (storageLimitBytes > 0 &&
+                        getTotalDownloadedBytes() >= storageLimitBytes)) {
+
+            showMessage("Storage limit reached");
+            return;
+        }
+
+        String fileName =
+                item.title.replaceAll("[^a-zA-Z0-9_-]", "_")
+                        + "_" + System.currentTimeMillis() + ".mp4";
+
+        try {
+
+            DownloadManager.Request request =
+                    new DownloadManager.Request(Uri.parse(DEMO_URL));
+
+            request.setTitle(item.title);
+            request.setDescription("Downloading in CineWorld");
+
+            request.setNotificationVisibility(
+                    DownloadManager.Request.VISIBILITY_VISIBLE);
+
+            request.setDestinationInExternalFilesDir(
+                    this, Environment.DIRECTORY_MOVIES, fileName);
+
+            android.content.SharedPreferences prefs =
+                    getSharedPreferences(PREFS, MODE_PRIVATE);
+
+            boolean allowWifi =
+                    prefs.getBoolean(KEY_WIFI, true);
+
+            boolean allowMobile =
+                    prefs.getBoolean(KEY_MOBILE, true);
+
+            if (!allowWifi && !allowMobile) {
+                showMessage(
+                        "Enable Wi-Fi or Mobile Data in Download Settings");
+                return;
+            }
+
+            int allowedNetworks = 0;
+
+            if (allowWifi) {
+                allowedNetworks |=
+                        DownloadManager.Request.NETWORK_WIFI;
+            }
+
+            if (allowMobile) {
+                allowedNetworks |=
+                        DownloadManager.Request.NETWORK_MOBILE;
+            }
+
+            request.setAllowedNetworkTypes(allowedNetworks);
+
+            long id = downloadManager.enqueue(request);
+
+            downloadIds.add(id);
+            saveDownloadIds();
+            refreshDownloads();
+
+            showMessage("Download started: " + item.title);
+
+        } catch (Exception e) {
+            showMessage("Download failed to start");
+        }
+    }
+
+    private long getTotalDownloadedBytes() {
+
+        long total = 0;
+
+        if (downloadManager == null) return total;
+
+        for (Long id : downloadIds) {
+
+            DownloadManager.Query query =
+                    new DownloadManager.Query().setFilterById(id);
+
+            Cursor cursor = null;
+
+            try {
+
+                cursor = downloadManager.query(query);
+
+                if (cursor != null && cursor.moveToFirst()) {
+
+                    int column = cursor.getColumnIndex(
+                            DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR);
+
+                    if (column >= 0) {
+                        total += cursor.getLong(column);
+                    }
+                }
+
+            } catch (Exception ignored) {
+
+            } finally {
+
+                if (cursor != null) {
+                    cursor.close();
+                }
+            }
+        }
+
+        return total;
+    }
+
+    private void startDownloadMonitoring() {
+
+        if (downloadRunnable != null) {
+            downloadHandler.removeCallbacks(downloadRunnable);
+        }
+
+        downloadRunnable = new Runnable() {
+
+            @Override
+            public void run() {
+
+                refreshDownloads();
+                downloadHandler.postDelayed(this, 1000);
+            }
+        };
+
+        downloadHandler.post(downloadRunnable);
+    }
+
+    private void stopDownloadMonitoring() {
+
+        if (downloadRunnable != null) {
+            downloadHandler.removeCallbacks(downloadRunnable);
+        }
+    }
+
+    // ----------------------------------------------------
+    // NAVIGATION
+    // ----------------------------------------------------
+
+    private void setupNavigation() {
+
+        navigationItems = new TextView[]{
+                binding.navHome,
+                binding.navMovies,
+                binding.navShows,
+                binding.navDownloads,
+                binding.navProfile
+        };
+
+        binding.navHome.setOnClickListener(v -> selectTab(0));
+        binding.navMovies.setOnClickListener(v -> selectTab(1));
+        binding.navShows.setOnClickListener(v -> selectTab(2));
+        binding.navDownloads.setOnClickListener(v -> selectTab(3));
+        binding.navProfile.setOnClickListener(v -> selectTab(4));
+    }
+
+    private void selectTab(int position) {
+
+        if (authGateActive ||
+                (mAuth != null && mAuth.getCurrentUser() == null)) {
+
+            authGateActive = true;
+            setAppContentLocked(true);
+
+            if (authOverlay == null) {
+                showAuthScreen("login");
+            }
+
+            return;
+        }
+
+        binding.homeContent.setVisibility(
+                position == 0 ? View.VISIBLE : View.GONE);
+
+        binding.moviesContent.setVisibility(
+                position == 1 ? View.VISIBLE : View.GONE);
+
+        binding.showsContent.setVisibility(
+                position == 2 ? View.VISIBLE : View.GONE);
+
+        binding.downloadsContent.setVisibility(
+                position == 3 ? View.VISIBLE : View.GONE);
+
+        binding.profileContent.setVisibility(
+                position == 4 ? View.VISIBLE : View.GONE);
+
+        for (int i = 0; i < navigationItems.length; i++) {
+
+            navigationItems[i].setTextColor(
+                    i == position ? gold : gray);
+        }
+
+        binding.mainScroll.smoothScrollTo(0, 0);
+
+        if (position == 3) {
+            refreshDownloads();
+        }
+    }
+
+    // ----------------------------------------------------
+    // HOME
+    // ----------------------------------------------------
+
+    private void setupHome() {
+
+        binding.movieOne.setOnClickListener(v ->
+                showDetails(movies.get(0)));
+
+        binding.movieTwo.setOnClickListener(v ->
+                showDetails(movies.get(1)));
+
+        binding.movieThree.setOnClickListener(v ->
+                showDetails(movies.get(2)));
+
+        binding.seeAllTrending.setOnClickListener(v ->
+                selectTab(1));
+
+        binding.featuredPlayButton.setOnClickListener(v ->
+                showDetails(movies.get(0)));
+    }
+
+    // ----------------------------------------------------
+    // MOVIES AND SHOWS
+    // ----------------------------------------------------
+
+    private void setupCatalogScreens() {
+
+        addCatalogItems(binding.moviesContent, movies);
+        addCatalogItems(binding.showsContent, shows);
+    }
+
+    private void addCatalogItems(LinearLayout parent,
+                                 ArrayList<ContentItem> items) {
+
+        for (ContentItem item : items) {
+
+            LinearLayout card = new LinearLayout(this);
+
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(10, 10, 10, 10);
+            card.setBackgroundColor(dark);
+
+            LinearLayout.LayoutParams cardParams =
+                    new LinearLayout.LayoutParams(-1, -2);
+
+            cardParams.setMargins(0, 14, 0, 0);
+            parent.addView(card, cardParams);
+
+            ImageView poster = new ImageView(this);
+
+            poster.setLayoutParams(
+                    new LinearLayout.LayoutParams(105, 145));
+
+            poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            card.addView(poster);
+
+            loadPoster(poster, item.image);
+
+            LinearLayout info = verticalLayout();
+            info.setPadding(12, 4, 4, 4);
+
+            card.addView(info,
+                    new LinearLayout.LayoutParams(0, -2, 1));
+
+            info.addView(makeText(item.title, 17, white, true));
+            info.addView(makeText(item.genre, 12, gold, false));
+
+            TextView description =
+                    makeText(item.description, 12, gray, false);
+
+            LinearLayout.LayoutParams descParams =
+                    new LinearLayout.LayoutParams(-1, -2);
+
+            descParams.topMargin = 8;
+            info.addView(description, descParams);
+
+            Button details = new Button(this);
+
+            details.setText("VIEW DETAILS");
+            details.setTextColor(dark);
+            details.setTextSize(10);
+
+            details.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(gold));
+
+            info.addView(details);
+
+            details.setOnClickListener(v -> showDetails(item));
+
+            Button downloadButton = new Button(this);
+
+            downloadButton.setText("DOWNLOAD");
+            downloadButton.setTextColor(dark);
+            downloadButton.setTextSize(10);
+
+            downloadButton.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(gold));
+
+            info.addView(downloadButton);
+
+            downloadButton.setOnClickListener(v ->
+                    startMovieDownload(item));
+
+            poster.setOnClickListener(v ->
+                    showDetails(item));
+        }
+    }
+
+    private TextView makeText(String value, int size,
+                              int color, boolean bold) {
+
+        TextView text = new TextView(this);
+
+        text.setText(value);
+        text.setTextSize(size);
+        text.setTextColor(color);
+
+        if (bold) {
+            text.setTypeface(null, Typeface.BOLD);
+        }
+
+        return text;
+    }
+
+    // ----------------------------------------------------
+    // MOVIE DETAILS
+    // ----------------------------------------------------
+
+    private void showDetails(ContentItem item) {
+
+        Intent intent = new Intent(
+                MainActivity.this, MovieDetailsActivity.class);
+
+        intent.putExtra("title", item.title);
+        intent.putExtra("genre", item.genre);
+        intent.putExtra("description", item.description);
+        intent.putExtra("image", item.image);
+        intent.putExtra("series", item.series);
+
+        startActivity(intent);
+    }
+
+    // ----------------------------------------------------
+    // EXOPLAYER
+    // ----------------------------------------------------
+
+    private void setupPlayer() {
+
+        player = new ExoPlayer.Builder(this).build();
+
+        player.addListener(new Player.Listener() {
+
+            @Override
+            public void onPlaybackStateChanged(int state) {
+
+                if (state == Player.STATE_READY) {
+                    showMessage("Video Ready");
+                }
+            }
+
+            @Override
+            public void onPlayerError(PlaybackException error) {
+
+                showMessage("Playback Error: " +
+                        error.getErrorCodeName());
+            }
+        });
+    }
+
+    private void playVideo(Uri uri) {
+
+        if (player == null) return;
+
+        MediaItem item = MediaItem.fromUri(uri);
+
+        player.setMediaItem(item);
+        player.prepare();
+        player.play();
+
+        showMessage("Playing Video");
+    }
+
+    private void playOnline(String url) {
+
+        if (url == null || url.trim().isEmpty()) {
+            showMessage("Enter video URL");
+            return;
+        }
+
+        Uri uri = Uri.parse(url.trim());
+
+        if (!"https".equalsIgnoreCase(uri.getScheme()) &&
+                !"http".equalsIgnoreCase(uri.getScheme())) {
+
+            showMessage("Invalid video URL");
+            return;
+        }
+
+        MediaItem.Builder builder =
+                new MediaItem.Builder().setUri(uri);
+
+        String path = uri.getPath();
+
+        if (path != null) {
+
+            String lower = path.toLowerCase();
+
+            if (lower.endsWith(".m3u8")) {
+                builder.setMimeType(MimeTypes.APPLICATION_M3U8);
+
+            } else if (lower.endsWith(".mpd")) {
+                builder.setMimeType(MimeTypes.APPLICATION_MPD);
+            }
+        }
+
+        player.setMediaItem(builder.build());
+        player.prepare();
+        player.play();
+    }
+
+    // ----------------------------------------------------
+    // DOWNLOAD CENTER HELPERS
+    // ----------------------------------------------------
+
+    private int dp(float value) {
+
+        return (int) (value *
+                getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private GradientDrawable roundedBackground(
+            int color, int strokeColor, int radiusDp) {
+
+        GradientDrawable bg = new GradientDrawable();
+
+        bg.setColor(color);
+        bg.setCornerRadius(dp(radiusDp));
+
+        if (strokeColor != 0) {
+            bg.setStroke(dp(1), strokeColor);
+        }
+
+        return bg;
+    }
+
+    private LinearLayout verticalLayout() {
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+
+        return layout;
+    }
+
+    private LinearLayout horizontalLayout() {
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.HORIZONTAL);
+        layout.setGravity(Gravity.CENTER_VERTICAL);
+
+        return layout;
+    }
+
+    private TextView sectionLabel(String value) {
+
+        TextView label = makeText(value, 14, gold, true);
+
+        label.setPadding(dp(2), dp(18), dp(2), dp(8));
+
+        return label;
+    }
+
+    // ----------------------------------------------------
+    // DOWNLOADS SCREEN
+    // ----------------------------------------------------
+
+    private void setupDownloadsScreen() {
+
+        loadDownloadIds();
+
+        binding.downloadsContent.removeAllViews();
+
+        binding.downloadsContent.setPadding(
+                dp(16), dp(14), dp(16), dp(24));
+
+        binding.downloadsContent.setBackgroundColor(black);
+
+        TextView heading =
+                makeText("DOWNLOAD CENTER", 25, gold, true);
+
+        binding.downloadsContent.addView(heading);
+
+        TextView subtitle = makeText(
+                "Your movies. Ready whenever you are.",
+                12, gray, false);
+
+        subtitle.setPadding(0, dp(4), 0, dp(16));
+        binding.downloadsContent.addView(subtitle);
+
+        LinearLayout storageCard = verticalLayout();
+
+        storageCard.setPadding(
+                dp(16), dp(15), dp(16), dp(15));
+
+        storageCard.setBackground(
+                roundedBackground(0xFF1B1B23, 0xFF6D5314, 18));
+
+        binding.downloadsContent.addView(storageCard,
+                new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout storageTop = horizontalLayout();
+
+        storageTop.addView(
+                makeText("PHONE STORAGE", 13, white, true),
+                new LinearLayout.LayoutParams(0, -2, 1));
+
+        storageTop.addView(
+                makeText("CINEWORLD", 10, gold, true));
+
+        storageCard.addView(storageTop);
+
+        storageText = makeText(
+                "Calculating storage...", 12, gray, false);
+
+        storageText.setPadding(0, dp(10), 0, dp(9));
+        storageCard.addView(storageText);
+
+        storageProgress = new ProgressBar(
+                this, null,
+                android.R.attr.progressBarStyleHorizontal);
+
+        storageProgress.setMax(100);
+
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+
+            storageProgress.setProgressTintList(
+                    android.content.res.ColorStateList.valueOf(gold));
+
+            storageProgress.setProgressBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(0xFF38333A));
+        }
+
+        storageCard.addView(storageProgress,
+                new LinearLayout.LayoutParams(-1, dp(8)));
+
+        Button manageStorage = new Button(this);
+
+        manageStorage.setText("MANAGE STORAGE");
+        manageStorage.setTextSize(11);
+        manageStorage.setTextColor(dark);
+
+        manageStorage.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(gold));
+
+        LinearLayout.LayoutParams manageParams =
+                new LinearLayout.LayoutParams(-1, dp(44));
+
+        manageParams.topMargin = dp(12);
+
+        storageCard.addView(manageStorage, manageParams);
+
+        manageStorage.setOnClickListener(v ->
+                showManageStorageDialog());
+
+        binding.downloadsContent.addView(
+                sectionLabel("DOWNLOADING"));
+
+        downloadsList = verticalLayout();
+
+        binding.downloadsContent.addView(downloadsList,
+                new LinearLayout.LayoutParams(-1, -2));
+
+        binding.downloadsContent.addView(
+                sectionLabel("DOWNLOAD SETTINGS"));
+
+        LinearLayout settingsCard = verticalLayout();
+
+        settingsCard.setPadding(
+                dp(15), dp(8), dp(15), dp(8));
+
+        settingsCard.setBackground(
+                roundedBackground(0xFF1B1B23, 0xFF39343A, 16));
+
+        binding.downloadsContent.addView(settingsCard,
+                new LinearLayout.LayoutParams(-1, -2));
+
+        android.content.SharedPreferences prefs =
+                getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        wifiSwitch = new Switch(this);
+
+        wifiSwitch.setText("Allow downloads over Wi-Fi");
+        wifiSwitch.setTextColor(white);
+        wifiSwitch.setTextSize(13);
+        wifiSwitch.setChecked(prefs.getBoolean(KEY_WIFI, true));
+
+        settingsCard.addView(wifiSwitch);
+
+        wifiSwitch.setOnCheckedChangeListener((button, checked) ->
+                prefs.edit().putBoolean(KEY_WIFI, checked).apply());
+
+        mobileDataSwitch = new Switch(this);
+
+        mobileDataSwitch.setText("Allow downloads over Mobile Data");
+        mobileDataSwitch.setTextColor(white);
+        mobileDataSwitch.setTextSize(13);
+        mobileDataSwitch.setChecked(prefs.getBoolean(KEY_MOBILE, true));
+
+        settingsCard.addView(mobileDataSwitch);
+
+        mobileDataSwitch.setOnCheckedChangeListener((button, checked) ->
+                prefs.edit().putBoolean(KEY_MOBILE, checked).apply());
+
+        TextView qualityLabel =
+                makeText("DOWNLOAD QUALITY", 11, gold, true);
+
+        qualityLabel.setPadding(0, dp(12), 0, dp(4));
+        settingsCard.addView(qualityLabel);
+
+        qualitySpinner = new Spinner(this);
+
+        String[] qualities = {"480p", "720p", "1080p"};
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                qualities);
+
+        adapter.setDropDownViewResource(
+                android.R.layout.simple_spinner_dropdown_item);
+
+        qualitySpinner.setAdapter(adapter);
+
+        String savedQuality =
+                prefs.getString(KEY_QUALITY, "720p");
+
+        int qualityIndex =
+                Arrays.asList(qualities).indexOf(savedQuality);
+
+        qualitySpinner.setSelection(Math.max(0, qualityIndex));
+
+        settingsCard.addView(qualitySpinner);
+
+        qualitySpinner.setOnItemSelectedListener(
+                new AdapterView.OnItemSelectedListener() {
+
+                    @Override
+                    public void onItemSelected(AdapterView<?> parent,
+                                               View view,
+                                               int position, long id) {
+
+                        prefs.edit()
+                                .putString(KEY_QUALITY, qualities[position])
+                                .apply();
+                    }
+
+                    @Override
+                    public void onNothingSelected(AdapterView<?> parent) {
+                    }
+                });
+
+        TextView qualityNote = makeText(
+                "Demo video uses one fixed source; this setting is saved for future video sources.",
+                10, gray, false);
+
+        qualityNote.setPadding(0, dp(5), 0, dp(8));
+        settingsCard.addView(qualityNote);
+
+        refreshDownloads();
+    }
+
+    private void showManageStorageDialog() {
+
+        File folder = getDownloadFolder();
+
+        long free = folder == null ? 0 : folder.getUsableSpace();
+        long downloaded = getTotalDownloadedBytes();
+
+        String path = folder == null
+                ? "Unavailable" : folder.getAbsolutePath();
+
+        new AlertDialog.Builder(this)
+                .setTitle("MANAGE STORAGE")
+                .setMessage("Downloaded by CineWorld: " +
+                        formatBytes(downloaded) +
+                        "\nFree space: " + formatBytes(free) +
+                        "\n\nSave location:\n" + path)
+                .setPositiveButton("DONE", null)
+                .setNeutralButton("DELETE ALL DOWNLOADS",
+                        (dialog, which) ->
+
+                                new AlertDialog.Builder(this)
+                                        .setTitle("Delete all downloads?")
+                                        .setMessage("All CineWorld downloaded videos will be removed.")
+                                        .setNegativeButton("CANCEL", null)
+                                        .setPositiveButton("DELETE",
+                                                (d, w) -> {
+
+                                                    if (downloadManager != null) {
+
+                                                        for (Long id :
+                                                                new ArrayList<>(downloadIds)) {
+
+                                                            downloadManager.remove(id);
+                                                        }
+                                                    }
+
+                                                    downloadIds.clear();
+                                                    saveDownloadIds();
+                                                    refreshDownloads();
+
+                                                    showMessage(
+                                                            "All downloads deleted");
+                                                })
+                                        .show())
+                .show();
+    }
+
+    private void updateStorageMeter() {
+
+        File folder = getDownloadFolder();
+
+        if (folder == null || storageText == null ||
+                storageProgress == null) return;
+
+        long free = folder.getUsableSpace();
+
+        long used = Math.max(0, initialFreeBytes - free);
+
+        int percent = 0;
+
+        if (initialFreeBytes > 0) {
+            percent = (int) (used * 100L / initialFreeBytes);
+        }
+
+        percent = Math.max(0, Math.min(100, percent));
+
+        storageProgress.setProgress(percent);
+
+        storageText.setText(
+                "Used since opening: " + percent
+                        + "%   •   Free: " + formatBytes(free)
+                        + "   •   Download budget: "
+                        + formatBytes(storageLimitBytes));
+    }
+
+    private String formatBytes(long bytes) {
+
+        if (bytes < 0) bytes = 0;
+
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+
+        if (bytes < 1024L * 1024L) {
+            return String.format(java.util.Locale.US,
+                    "%.1f KB", bytes / 1024.0);
+        }
+
+        if (bytes < 1024L * 1024L * 1024L) {
+            return String.format(java.util.Locale.US,
+                    "%.1f MB", bytes / (1024.0 * 1024.0));
+        }
+
+        return String.format(java.util.Locale.US,
+                "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+
+    private static class DownloadEntry {
+
+        long id, downloaded, total;
+        int status;
+        String title, localUri;
+    }
+
+    private void refreshDownloads() {
+
+        if (downloadsList == null || downloadManager == null) return;
+
+        downloadsList.removeAllViews();
+
+        updateStorageMeter();
+
+        ArrayList<DownloadEntry> active = new ArrayList<>();
+        ArrayList<DownloadEntry> completed = new ArrayList<>();
+
+        for (Long id : new ArrayList<>(downloadIds)) {
+
+            DownloadManager.Query query =
+                    new DownloadManager.Query().setFilterById(id);
+
+            Cursor cursor = null;
+
+            try {
+
+                cursor = downloadManager.query(query);
+
+                if (cursor == null || !cursor.moveToFirst()) continue;
+
+                int statusColumn = cursor.getColumnIndex(
+                        DownloadManager.COLUMN_STATUS);
+
+                int downloadedColumn = cursor.getColumnIndex(
+                        DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR);
+
+                int totalColumn = cursor.getColumnIndex(
+                        DownloadManager.COLUMN_TOTAL_SIZE_BYTES);
+
+                int titleColumn = cursor.getColumnIndex(
+                        DownloadManager.COLUMN_TITLE);
+
+                int uriColumn = cursor.getColumnIndex(
+                        DownloadManager.COLUMN_LOCAL_URI);
+
+                if (statusColumn < 0) continue;
+
+                DownloadEntry entry = new DownloadEntry();
+
+                entry.id = id;
+
+                entry.status = cursor.getInt(statusColumn);
+
+                entry.downloaded = downloadedColumn >= 0
+                        ? cursor.getLong(downloadedColumn) : 0;
+
+                entry.total = totalColumn >= 0
+                        ? cursor.getLong(totalColumn) : -1;
+
+                entry.title = titleColumn >= 0
+                        ? cursor.getString(titleColumn) : "CineWorld Video";
+
+                entry.localUri = uriColumn >= 0
+                        ? cursor.getString(uriColumn) : null;
+
+                if (storageLimitBytes > 0 &&
+                        getTotalDownloadedBytes() > storageLimitBytes &&
+                        entry.status == DownloadManager.STATUS_RUNNING) {
+
+                    downloadManager.remove(id);
+
+                    entry.status = DownloadManager.STATUS_FAILED;
+                }
+
+                if (entry.status == DownloadManager.STATUS_SUCCESSFUL) {
+                    completed.add(entry);
+                } else {
+                    active.add(entry);
+                }
+
+            } catch (Exception ignored) {
+
+            } finally {
+
+                if (cursor != null) {
+                    cursor.close();
+                }
+            }
+        }
+
+        if (active.isEmpty()) {
+
+            TextView empty = makeText(
+                    "No active downloads.\nExplore Movies or Shows to download a video.",
+                    12, gray, false);
+
+            empty.setPadding(
+                    dp(12), dp(12), dp(12), dp(18));
+
+            downloadsList.addView(empty);
+
+        } else {
+
+            for (DownloadEntry entry : active) {
+                addDownloadCard(entry);
+            }
+        }
+
+        downloadsList.addView(sectionLabel("DOWNLOADED"));
+
+        if (completed.isEmpty()) {
+
+            TextView empty = makeText(
+                    "No downloaded videos yet.", 12, gray, false);
+
+            empty.setPadding(
+                    dp(12), dp(8), dp(12), dp(18));
+
+            downloadsList.addView(empty);
+
+        } else {
+
+            for (DownloadEntry entry : completed) {
+                addDownloadCard(entry);
+            }
+        }
+    }
+
+    private void addDownloadCard(DownloadEntry entry) {
+
+        long id = entry.id;
+        String title = entry.title;
+        int status = entry.status;
+        long downloaded = entry.downloaded;
+        long total = entry.total;
+        String localUri = entry.localUri;
+
+        LinearLayout card = verticalLayout();
+
+        card.setPadding(
+                dp(14), dp(13), dp(14), dp(13));
+
+        card.setBackground(
+                roundedBackground(0xFF1B1B23, 0xFF4C3B18, 15));
+
+        LinearLayout.LayoutParams cardParams =
+                new LinearLayout.LayoutParams(-1, -2);
+
+        cardParams.setMargins(0, dp(5), 0, dp(10));
+
+        downloadsList.addView(card, cardParams);
+
+        card.addView(makeText(title, 15, white, true));
+
+        int progress = 0;
+
+        if (total > 0) {
+            progress = (int) (downloaded * 100L / total);
+        }
+
+        progress = Math.max(0, Math.min(100, progress));
+
+        String statusText;
+
+        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+            statusText = "READY TO WATCH OFFLINE";
+
+        } else if (status == DownloadManager.STATUS_FAILED) {
+            statusText = "DOWNLOAD FAILED";
+
+        } else if (status == DownloadManager.STATUS_PAUSED) {
+            statusText = "DOWNLOAD PAUSED";
+
+        } else {
+            statusText = "DOWNLOADING  •  " + progress + "%";
+        }
+
+        TextView statusLabel =
+                makeText(statusText, 11, gold, true);
+
+        statusLabel.setPadding(0, dp(6), 0, dp(7));
+
+        card.addView(statusLabel);
+
+        ProgressBar progressBar = new ProgressBar(
+                this, null,
+                android.R.attr.progressBarStyleHorizontal);
+
+        progressBar.setMax(100);
+        progressBar.setProgress(progress);
+
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+
+            progressBar.setProgressTintList(
+                    android.content.res.ColorStateList.valueOf(gold));
+        }
+
+        card.addView(progressBar,
+                new LinearLayout.LayoutParams(-1, dp(7)));
+
+        TextView size = makeText(
+                formatBytes(downloaded) + " / " +
+                        (total > 0
+                                ? formatBytes(total)
+                                : "Unknown size"),
+                10, gray, false);
+
+        size.setPadding(0, dp(6), 0, dp(7));
+
+        card.addView(size);
+
+        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+
+            Button play = new Button(this);
+
+            play.setText("PLAY OFFLINE");
+            play.setTextColor(dark);
+
+            play.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(gold));
+
+            card.addView(play);
+
+            play.setOnClickListener(v -> {
+
+                if (localUri == null || localUri.isEmpty()) {
+                    showMessage("Downloaded file not found");
+                    return;
+                }
+
+                Intent intent = new Intent(
+                        MainActivity.this, PlayerActivity.class);
+
+                intent.putExtra("title", title);
+                intent.putExtra("video_url", localUri);
+
+                startActivity(intent);
+            });
+
+        } else if (status == DownloadManager.STATUS_FAILED) {
+
+            Button retry = new Button(this);
+
+            retry.setText("RETRY DOWNLOAD");
+            retry.setTextColor(dark);
+
+            retry.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(gold));
+
+            card.addView(retry);
+
+            retry.setOnClickListener(v -> {
+
+                downloadManager.remove(id);
+
+                downloadIds.remove(id);
+                saveDownloadIds();
+
+                ContentItem retryItem =
+                        new ContentItem(title, "", "", "", false);
+
+                startMovieDownload(retryItem);
+            });
+        }
+
+        Button delete = new Button(this);
+
+        delete.setText("DELETE");
+        delete.setTextColor(white);
+
+        delete.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(0xFF4A2525));
+
+        card.addView(delete);
+
+        delete.setOnClickListener(v ->
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Delete Download?")
+                        .setMessage("Remove this video from CineWorld?")
+                        .setNegativeButton("CANCEL", null)
+                        .setPositiveButton("DELETE",
+                                (dialog, which) -> {
+
+                                    downloadManager.remove(id);
+
+                                    downloadIds.remove(id);
+                                    saveDownloadIds();
+                                    refreshDownloads();
+
+                                    showMessage("Download deleted");
+                                })
+                        .show());
+    }
+
+    // ----------------------------------------------------
+    // PROFILE SECTION
+    // ----------------------------------------------------
+
+    private void setupProfileScreen() {
+
+        if (binding == null) return;
+
+        binding.profileContent.removeAllViews();
+
+        android.content.SharedPreferences prefs =
+                getSharedPreferences(PROFILE_PREFS, MODE_PRIVATE);
+
+        LinearLayout profile = verticalLayout();
+
+        profile.setPadding(20, 20, 20, 30);
+        profile.setBackgroundColor(black);
+
+        binding.profileContent.addView(profile);
+
+        profile.addView(makeText("MY PROFILE", 25, gold, true));
+
+        profile.addView(makeText(
+                "Manage your CineWorld account", 13, gray, false));
+
+        LinearLayout profileCard = verticalLayout();
+
+        profileCard.setGravity(Gravity.CENTER);
+        profileCard.setPadding(20, 25, 20, 25);
+
+        profileCard.setBackground(
+                roundedBackground(0xFF191920, gold, 22));
+
+        LinearLayout.LayoutParams cardParams =
+                new LinearLayout.LayoutParams(-1, -2);
+
+        cardParams.setMargins(0, 25, 0, 20);
+
+        profile.addView(profileCard, cardParams);
+
+        TextView avatar = makeText("👤", 55, gold, true);
+
+        avatar.setGravity(Gravity.CENTER);
+
+        profileCard.addView(avatar);
+
+        String savedName = prefs.getString(
+                "profile_name", "CineWorld User");
+
+        String savedEmail = prefs.getString(
+                "profile_email", "Welcome to CineWorld");
+
+        profileNameView = makeText(savedName, 21, white, true);
+
+        profileNameView.setGravity(Gravity.CENTER);
+
+        profileCard.addView(profileNameView);
+
+        profileEmailView = makeText(savedEmail, 13, gray, false);
+
+        profileEmailView.setGravity(Gravity.CENTER);
+
+        profileCard.addView(profileEmailView);
+
+        TextView membership =
+                makeText("✦  CINEWORLD MEMBER  ✦", 14, gold, true);
+
+        membership.setGravity(Gravity.CENTER);
+        membership.setPadding(0, 15, 0, 0);
+
+        profileCard.addView(membership);
+
+        FirebaseUser currentUser = mAuth.getCurrentUser();
+
+        if (currentUser == null) {
+
+            Button loginButton = new Button(this);
+
+            loginButton.setText("LOGIN / CREATE ACCOUNT");
+            loginButton.setTextColor(dark);
+
+            loginButton.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(gold));
+
+            profile.addView(loginButton);
+
+            loginButton.setOnClickListener(v ->
+                    showAuthScreen("login"));
+
+        } else {
+
+            TextView signedIn =
+                    makeText("✓ ACCOUNT SIGNED IN", 12, gold, true);
+
+            signedIn.setPadding(0, 0, 0, 12);
+
+            profile.addView(signedIn);
+        }
+
+        addProfileOption(profile, "✎", "Edit Profile",
+                "Edit your profile");
+
+        addProfileOption(profile, "♡", "My Watchlist",
+                "Your watchlist will appear here.");
+
+        addProfileOption(profile, "◷", "Watch History",
+                "Your watch history will appear here.");
+
+        addProfileOption(profile, "⬇", "My Downloads",
+                "Your downloaded movies are in Downloads section.");
+
+        addProfileOption(profile, "⚙", "App Settings",
+                "Settings will be available soon.");
+
+        addProfileOption(profile, "?", "Help & Support",
+                "CineWorld support.");
+
+        addProfileOption(profile, "♧", "Privacy Policy",
+                "CineWorld Privacy Policy.");
+
+        // ADMIN LOGIN REMOVED FROM PROFILE
+
+        if (currentUser != null) {
+
+            addProfileOption(profile, "⇥", "Logout",
+                    "Logout from CineWorld");
+        }
+
+        TextView about = makeText(
+                "CineWorld\nYour Movies. Your World.\nVersion 1.0 Demo",
+                13, gray, false);
+
+        about.setGravity(Gravity.CENTER);
+        about.setPadding(0, 30, 0, 10);
+
+        profile.addView(about);
+    }
+
+    private void addProfileOption(LinearLayout parent,
+                                  String icon, String title,
+                                  String message) {
+
+        LinearLayout item = horizontalLayout();
+
+        item.setPadding(16, 16, 16, 16);
+
+        item.setBackground(
+                roundedBackground(0xFF191920, 0xFF45403A, 14));
+
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(-1, -2);
+
+        params.setMargins(0, 0, 0, 10);
+
+        parent.addView(item, params);
+
+        item.addView(makeText(icon, 23, gold, true));
+
+        TextView titleView =
+                makeText(title, 15, white, true);
+
+        LinearLayout.LayoutParams titleParams =
+                new LinearLayout.LayoutParams(0, -2, 1);
+
+        titleParams.setMargins(18, 0, 0, 0);
+
+        item.addView(titleView, titleParams);
+
+        item.addView(makeText("›", 25, gold, true));
+
+        item.setOnClickListener(v -> {
+
+            if (title.equals("Edit Profile")) {
+
+                startActivity(new Intent(
+                        MainActivity.this,
+                        EditProfileActivity.class));
+
+            } else if (title.equals("Logout")) {
+
+                logoutUser();
+
+            } else if (title.equals("My Downloads")) {
+
+                selectTab(3);
+
+            } else {
+
+                Toast.makeText(MainActivity.this,
+                        message, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    // ----------------------------------------------------
+    // HEADER
+    // ----------------------------------------------------
+
+    private void setupHeader() {
+
+        binding.searchButton.setOnClickListener(v -> {
+
+            EditText input = new EditText(this);
+
+            input.setHint("Search Movies and Shows");
+
+            new AlertDialog.Builder(this)
+                    .setTitle("CineWorld Search")
+                    .setView(input)
+                    .setPositiveButton("Search", (dialog, which) -> {
+
+                        String query =
+                                input.getText().toString().trim();
+
+                        if (query.isEmpty()) {
+                            showMessage("Enter a name");
+                            return;
+                        }
+
+                        searchCatalog(query);
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        });
+
+        binding.notificationButton.setOnClickListener(v ->
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Notifications")
+                        .setMessage("No new notifications")
+                        .setPositiveButton("OK", null)
+                        .show());
+
+        binding.profileButton.setOnClickListener(v ->
+                selectTab(4));
+    }
+
+    private void searchCatalog(String query) {
+
+        String key = query.toLowerCase();
+
+        for (ContentItem item : movies) {
+
+            if (item.title.toLowerCase().contains(key)) {
+
+                selectTab(1);
+                showDetails(item);
+
+                return;
+            }
+        }
+
+        for (ContentItem item : shows) {
+
+            if (item.title.toLowerCase().contains(key)) {
+
+                selectTab(2);
+                showDetails(item);
+
+                return;
+            }
+        }
+
+        showMessage("No matching movie or show found");
+    }
+
+    // ----------------------------------------------------
+    // HELPERS
+    // ----------------------------------------------------
+
+    private void showMessage(String message) {
+
+        Toast.makeText(this,
+                message, Toast.LENGTH_SHORT).show();
+    }
+
+    // ----------------------------------------------------
+    // LIFECYCLE
+    // ----------------------------------------------------
+
+    @Override
+    public void onBackPressed() {
+
+        if (authGateActive ||
+                (mAuth != null && mAuth.getCurrentUser() == null)) {
+
+            authGateActive = true;
+
+            if (authOverlay == null) {
+                showAuthScreen("login");
+            }
+
+            return;
+        }
+
+        super.onBackPressed();
+    }
+
+    @Override
+    protected void onResume() {
+
+        super.onResume();
+
+        startDownloadMonitoring();
+
+        if (mAuth == null) return;
+
+        FirebaseUser user = mAuth.getCurrentUser();
+
+        if (user == null) {
+
+            authGateActive = true;
+            setAppContentLocked(true);
+
+            if (authOverlay == null) {
+                showAuthScreen("login");
+            }
+
+        } else if (sessionCheckPending) {
+
+            // Keep content locked while Firebase checks admin role.
+
+            authGateActive = true;
+            setAppContentLocked(true);
+
+        } else if (sessionCheckFailed) {
+
+            // Do not unlock the app if account verification failed.
+
+            authGateActive = true;
+            setAppContentLocked(true);
+
+        } else if (authGateActive) {
+
+            // Re-check when returning from the Admin Login screen.
+
+            verifyAndRouteSession(user);
+
+        } else {
+
+            setAppContentLocked(false);
+        }
+    }
+
+    @Override
+    protected void onStop() {
+
+        stopDownloadMonitoring();
+
+        if (player != null) {
+            player.pause();
+        }
+
+        super.onStop();
+    }
+
+    @Override
+    protected void onDestroy() {
+
+        stopDownloadMonitoring();
+
+        if (player != null) {
+            player.release();
+            player = null;
+        }
+
+        binding = null;
+
+        super.onDestroy();
+    }
+}

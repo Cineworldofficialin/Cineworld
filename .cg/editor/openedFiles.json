@@ -1,0 +1,231 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/res/drawable/cw_header_circle.xml",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 343,
+          "line": 10
+        },
+        "start": {
+          "column": 0,
+          "index": 343,
+          "line": 10
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/.gitignore",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/res/layout/activity_splash.xml",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 1792,
+          "line": 52
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/AndroidManifest.xml",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 2308,
+          "line": 75
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/res/values/themes.xml",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/res/values/styles.xml",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 1219,
+          "line": 29
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/java/com/example/cineworld/SplashActivity.java",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 8023,
+          "line": 217
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/java/com/example/cineworld/UserPanelActivity.java",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 9675,
+          "line": 230
+        },
+        "start": {
+          "column": 3,
+          "index": 3,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/res/layout/activity_movie_details.xml",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 6780,
+          "line": 175
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/java/com/example/cineworld/PlayerActivity.java",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 21434,
+          "line": 781
+        },
+        "start": {
+          "column": 5,
+          "index": 14574,
+          "line": 527
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/res/values/strings.xml",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 301,
+          "line": 10
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/google-services.json",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/build.gradle.kts",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/java/com/example/cineworld/MovieDetailsActivity.java",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/res/layout/activity_main.xml",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    }
+  ],
+  "projectPath": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld",
+  "selectedFile": "/storage/emulated/0/CodeOnTheGoProjects/CineWorld/app/src/main/res/layout/activity_main.xml"
+}

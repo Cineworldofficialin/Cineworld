@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- BASE APPLICATION THEME -->
+    <style name="Base.AppTheme"
+        parent="Theme.Material3.DayNight.NoActionBar">
+
+        <item name="android:windowLightStatusBar"
+            tools:targetApi="23">false</item>
+
+        <item name="android:windowLightNavigationBar"
+            tools:targetApi="27">false</item>
+
+        <item name="android:windowBackground">#080808</item>
+
+        <item name="android:navigationBarColor">#080808</item>
+
+        <item name="android:statusBarColor">#080808</item>
+
+    </style>
+
+    <!-- NORMAL APPLICATION THEME -->
+    <style name="AppTheme"
+        parent="Base.AppTheme" />
+
+    <!-- CINEWORLD SPLASH THEME -->
+    <style name="SplashTheme"
+        parent="Base.AppTheme">
+
+        <!-- BLACK BACKGROUND -->
+        <item name="android:windowBackground">#080808</item>
+
+        <!-- ANDROID 12+ SPLASH BACKGROUND -->
+        <item name="android:windowSplashScreenBackground"
+            tools:targetApi="31">#080808</item>
+
+        <!-- STATUS BAR -->
+        <item name="android:statusBarColor">#080808</item>
+
+        <item name="android:windowLightStatusBar">false</item>
+
+        <!-- NAVIGATION BAR -->
+        <item name="android:navigationBarColor">#080808</item>
+
+        <item name="android:windowLightNavigationBar">false</item>
+
+    </style>
+
+</resources>

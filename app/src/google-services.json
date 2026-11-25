@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "419977663018",
+    "firebase_url": "https://cineworld-c3f30-default-rtdb.firebaseio.com",
+    "project_id": "cineworld-c3f30",
+    "storage_bucket": "cineworld-c3f30.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:419977663018:android:c9d32f0143cce4874e2953",
+        "android_client_info": {
+          "package_name": "com.example.cineworld"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "419977663018-0isiap1q877aprkkfkbg2m8tsknrbcam.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.cineworld",
+            "certificate_hash": "2f2195c4088b7e746c150907402ec786a0aa896d"
+          }
+        },
+        {
+          "client_id": "419977663018-ji59ipaljmbgu3lj4tk5g4o0iagpj2ao.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDsubPt3_Hepo7zrGwtRlEhquXAnClaiV4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "419977663018-efignbqjbm5o26af2mva79senjam544j.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
